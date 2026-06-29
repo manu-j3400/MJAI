@@ -50,7 +50,26 @@ class Daemon:
 
         if errors:
             self._log_errors(name, errors)
+
+        # Broadcast to Windows companion if configured
+        if self.config.windows_host and name != "BOOT":
+            threading.Thread(
+                target=self._notify_windows, args=(name,), daemon=True
+            ).start()
+
         return errors
+
+    def _notify_windows(self, mode: str):
+        """Send mode switch to Windows companion service (non-blocking)."""
+        import socket, json as _json
+        try:
+            host, port = self.config.windows_host.rsplit(":", 1)
+            sock = socket.create_connection((host, int(port)), timeout=3)
+            sock.sendall(_json.dumps({"mode": mode}).encode() + b"\n")
+            sock.close()
+            log.info("Windows notified: %s", mode)
+        except Exception as e:
+            log.debug("Windows companion not reachable: %s", e)
 
     def run_action(self, action: Action) -> Optional[str]:
         """Run a single action script. Returns error string or None."""

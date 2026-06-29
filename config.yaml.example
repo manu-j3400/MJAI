@@ -1,0 +1,108 @@
+# MJAI config — define your modes here.
+# Actions are scripts in ~/.mjai/actions/ called with optional args.
+# BOOT mode runs automatically on login — never suggest it.
+
+modes:
+  DEEP:
+    description: "Deep focus — single task, no distractions, heads-down coding or building"
+    actions:
+      - script: set_dnd
+        args: ["on"]
+      - script: set_volume
+        args: ["30"]
+      - script: open_app
+        args: ["Visual Studio Code"]
+      - script: open_app
+        args: ["iTerm2"]
+      - script: notify
+        args: ["DEEP mode. Locked in."]
+
+  COMMS:
+    description: "Communications catch-up — messages, people, updates, networking"
+    actions:
+      - script: set_dnd
+        args: ["off"]
+      - script: open_app
+        args: ["Slack"]
+      - script: open_app
+        args: ["Discord"]
+      - script: open_app
+        args: ["WhatsApp"]
+      - script: notify
+        args: ["COMMS mode. Catching up."]
+
+  FLOW:
+    description: "Creative flow state — design, writing, thinking, low-interruption creative work"
+    actions:
+      - script: set_dnd
+        args: ["on"]
+      - script: set_volume
+        args: ["50"]
+      - script: open_app
+        args: ["Spotify"]
+      - script: notify
+        args: ["FLOW mode. Creating."]
+
+  ADMIN:
+    description: "Admin and logistics — email, calendar, tasks, scheduling, planning"
+    actions:
+      - script: set_dnd
+        args: ["off"]
+      - script: open_app
+        args: ["Arc"]
+      - script: notify
+        args: ["ADMIN mode. Getting organized."]
+
+  REST:
+    description: "Break time — step away, rest, away from screen"
+    actions:
+      - script: set_dnd
+        args: ["on"]
+      - script: set_volume
+        args: ["0"]
+      - script: notify
+        args: ["REST mode. Take a break."]
+
+  BOOT:
+    description: "Cold start — system startup only, do not suggest this mode"
+    actions:
+      - script: open_app
+        args: ["Arc"]
+      - script: open_app
+        args: ["Slack"]
+      - script: open_app
+        args: ["Spotify"]
+      - script: notify
+        args: ["System ready."]
+
+triggers:
+  hotkey: "cmd+shift+space"
+
+claude:
+  model: "claude-sonnet-4-6"
+  system_prompt: |
+    You are MJAI — a personal AI co-pilot that knows the user's current context (apps, time, recent work).
+    You appear as a floating bar on their screen when they hold a hotkey and speak.
+
+    Available modes:
+    - DEEP: heads-down coding/building, no distractions
+    - COMMS: catch up on messages, Slack, Discord, WhatsApp
+    - FLOW: creative work, design, writing — low interruption
+    - ADMIN: email, calendar, tasks, planning
+    - REST: break time, step away from screen
+
+    Your job: understand what the user said (casual speech, thinking out loud, commands, questions — anything)
+    and either:
+      1. Switch them to the best mode
+      2. Answer conversationally if no mode fits (keep it short — it shows on a tiny bar)
+
+    Rules:
+    - Never suggest BOOT (startup only, internal)
+    - Keep rationale under 8 words — it shows on a tiny overlay bar
+    - Understand casual speech: "let me grind" → DEEP, "lemme check msgs" → COMMS, "what time is it" → answer it
+    - Use user context to be relevant
+
+    Respond ONLY with JSON, no markdown:
+    {"mode": "MODE_NAME", "rationale": "short phrase"}
+    OR if no mode fits:
+    {"mode": null, "rationale": "short answer"}

@@ -29,6 +29,7 @@ class Config:
     hotkey: str
     claude_model: str
     claude_system_prompt: str
+    windows_host: str = ""   # optional: "192.168.x.x:56789"
 
     def mode_list_for_claude(self) -> str:
         """Returns a formatted list of modes + descriptions for the Claude prompt."""
@@ -62,4 +63,5 @@ def load() -> Config:
         hotkey=triggers.get("hotkey", "cmd+shift+space"),
         claude_model=claude_cfg.get("model", "claude-sonnet-4-6"),
         claude_system_prompt=claude_cfg.get("system_prompt", ""),
+        windows_host=raw.get("windows_host", ""),
     )
