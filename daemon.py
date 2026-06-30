@@ -60,16 +60,13 @@ class Daemon:
         return errors
 
     def _notify_windows(self, mode: str):
-        """Send mode switch to Windows companion service (non-blocking)."""
-        import socket, json as _json
+        """Send mode sync to Windows via the persistent WebSocket bridge."""
         try:
-            host, port = self.config.windows_host.rsplit(":", 1)
-            sock = socket.create_connection((host, int(port)), timeout=3)
-            sock.sendall(_json.dumps({"mode": mode}).encode() + b"\n")
-            sock.close()
-            log.info("Windows notified: %s", mode)
+            from windows_bridge import sync_send_mode
+            sync_send_mode(mode)
+            log.info("Windows bridge: synced mode %s", mode)
         except Exception as e:
-            log.debug("Windows companion not reachable: %s", e)
+            log.debug("Windows bridge send failed: %s", e)
 
     def run_action(self, action: Action) -> Optional[str]:
         """Run a single action script. Returns error string or None."""
@@ -120,20 +117,31 @@ class Daemon:
     # ── Claude integration ────────────────────────────────────────────────────
 
     def _gather_context(self) -> str:
-        """Snapshot of what the user is doing right now."""
+        """Rich snapshot of what the user is doing right now."""
         lines = []
         now = datetime.now()
         lines.append(f"Current time: {now.strftime('%A %B %d, %Y  %I:%M %p')}")
         lines.append(f"Active mode: {self.current_mode or 'none'}")
 
-        # Frontmost app
+        # Frontmost app + window title
         try:
             r = subprocess.run(
                 ["osascript", "-e",
                  'tell app "System Events" to name of first process whose frontmost is true'],
                 capture_output=True, text=True, timeout=3)
             if r.returncode == 0 and r.stdout.strip():
-                lines.append(f"Active app: {r.stdout.strip()}")
+                active_app = r.stdout.strip()
+                lines.append(f"Active app: {active_app}")
+                # Try to get window title
+                try:
+                    r2 = subprocess.run(
+                        ["osascript", "-e",
+                         f'tell application "{active_app}" to get name of front window'],
+                        capture_output=True, text=True, timeout=2)
+                    if r2.returncode == 0 and r2.stdout.strip():
+                        lines.append(f"Active window: {r2.stdout.strip()[:80]}")
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -146,6 +154,31 @@ class Daemon:
             if r.returncode == 0 and r.stdout.strip():
                 apps = [a.strip() for a in r.stdout.strip().split(",") if a.strip()][:12]
                 lines.append(f"Open apps: {', '.join(apps)}")
+        except Exception:
+            pass
+
+        # Battery level
+        try:
+            r = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True, timeout=3)
+            if r.returncode == 0:
+                import re
+                m = re.search(r'(\d+)%', r.stdout)
+                if m:
+                    level = int(m.group(1))
+                    charging = "AC Power" in r.stdout or "charging" in r.stdout.lower()
+                    status = "charging" if charging else "on battery"
+                    lines.append(f"Battery: {level}% ({status})")
+        except Exception:
+            pass
+
+        # WiFi network
+        try:
+            r = subprocess.run(
+                ["networksetup", "-getairportnetwork", "en0"],
+                capture_output=True, text=True, timeout=3)
+            if r.returncode == 0 and "Current Wi-Fi Network:" in r.stdout:
+                ssid = r.stdout.split("Current Wi-Fi Network:")[-1].strip()
+                lines.append(f"Network: {ssid}")
         except Exception:
             pass
 
@@ -167,6 +200,14 @@ class Daemon:
                 capture_output=True, text=True, timeout=3)
             if r.returncode == 0 and r.stdout.strip():
                 lines.append(f"Current git branch: {r.stdout.strip()}")
+        except Exception:
+            pass
+
+        # Workflow memory summary (recent facts)
+        try:
+            mem_path = Path.home() / ".mjai" / ".memory_context"
+            if mem_path.exists():
+                lines.append(f"Memory: {mem_path.read_text().strip()[:200]}")
         except Exception:
             pass
 

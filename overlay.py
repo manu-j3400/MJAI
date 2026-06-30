@@ -1,4 +1,4 @@
-"""MJAI floating overlay — bare minimum, definitely visible."""
+"""UnamOS floating overlay — bare minimum, definitely visible."""
 import logging
 from AppKit import (
     NSPanel, NSTextField, NSColor, NSFont,

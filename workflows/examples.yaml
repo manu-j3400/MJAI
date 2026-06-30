@@ -1,0 +1,50 @@
+# EXAMPLE WORKFLOWS — copy to ~/.mjai/workflows/ to use
+
+# ---------------------------------------------------
+# morning_startup: AI-powered morning routine
+# Trigger: say "good morning" OR fires at 8am weekdays
+# ---------------------------------------------------
+# name: morning_startup
+# description: "Fire up morning mode — apps, focus, AI brief"
+# triggers:
+#   - type: voice
+#     phrase: "good morning"
+#   - type: cron
+#     schedule: "0 8 * * 1-5"
+# steps:
+#   - id: set_deep
+#     action: set_mode
+#     mode: DEEP
+#   - id: morning_brief
+#     action: ollama
+#     model: dolphin3:8b
+#     prompt: "Today is {{date}}, {{time}}. One motivational sentence for a developer. Max 15 words."
+#     output_key: brief
+#   - id: notify_brief
+#     action: notify
+#     title: "Good morning"
+#     message: "{{brief}}"
+
+# ---------------------------------------------------
+# focus_check: Ask Claude what to work on
+# Trigger: say "what should I work on"
+# ---------------------------------------------------
+# name: focus_check
+# description: "Quick AI check-in on what to work on"
+# triggers:
+#   - type: voice
+#     phrase: "what should i work on"
+# steps:
+#   - id: check_git
+#     action: shell
+#     command: git
+#     args: ["-C", "/Users/YOUR_NAME/workspace/YOUR_PROJECT", "log", "--oneline", "-5"]
+#     output_key: recent_commits
+#   - id: ask_claude
+#     action: claude
+#     prompt: "Developer check-in. Recent git commits:\n{{recent_commits}}\n\nTime: {{time}}. Suggest ONE most important thing to work on. 1 sentence."
+#     output_key: suggestion
+#   - id: notify
+#     action: notify
+#     title: "Focus check"
+#     message: "{{suggestion}}"

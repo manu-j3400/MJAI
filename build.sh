@@ -6,6 +6,13 @@ set -e
   --collect-all pynput \
   --collect-all whisper \
   --collect-all AVFoundation \
+  --collect-all fastapi \
+  --collect-all uvicorn \
+  --collect-all httpx \
+  --collect-all WebKit \
+  --add-data "engine:engine" \
+  --add-data "dashboard:dashboard" \
+  --add-data "workflows:workflows" \
   --name MJAI \
   --noconfirm \
   menubar.py

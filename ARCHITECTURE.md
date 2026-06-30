@@ -1,134 +1,174 @@
-# MJAI Architecture
+# UnamOS Architecture
 
-## System overview
+UnamOS is a voice-first personal automation OS running natively on Mac and Windows.
+Zero cloud cost. No subscriptions. Your machine, your AI, your workflows.
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  macOS LaunchAgent (com.mjai.startup)                   │
-│  MJAI.app [LSUIElement=true, no Dock icon]              │
-│                                                         │
-│  ┌──────────────┐     ┌──────────────┐                 │
-│  │  menubar.py  │     │  hotkey.py   │                 │
-│  │  rumps App   │◄────│  pynput      │                 │
-│  │  main thread │     │  listener    │                 │
-│  └──────┬───────┘     └──────────────┘                 │
-│         │ 100ms poll timer                              │
-│         ▼                                               │
-│  ┌──────────────┐     ┌──────────────┐                 │
-│  │  overlay.py  │     │  voice.py    │                 │
-│  │  NSPanel     │     │  sounddevice │                 │
-│  │  pill bar    │     │  + Whisper   │                 │
-│  └──────────────┘     └──────┬───────┘                 │
-│                              │ transcript               │
-│                              ▼                          │
-│  ┌──────────────────────────────────────────┐          │
-│  │  daemon.py                               │          │
-│  │  - _gather_context() → active app, time, │          │
-│  │    open apps, git commits                │          │
-│  │  - claude_suggest() → claude -p "..."    │          │
-│  │  - trigger_mode() → run action scripts   │          │
-│  └──────────────────────────────────────────┘          │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Threading model
+## Stack
 
 ```
-pynput thread  →  trigger_queue.put("start"/"stop")
-                          │
-main thread (rumps.Timer 100ms poll)
-  ├── picks up "start" → overlay.show("listening") + spawn record thread
-  ├── picks up "stop"  → overlay.update("thinking") + rec_stop.set()
-  └── picks up result  → overlay.update(text) + trigger mode
-
-record thread  →  voice.record() → voice.transcribe() → result_queue.put()
-claude thread  →  daemon.claude_suggest() → result_queue.put()
+Voice (hotkey + mic + whisper)
+    │
+    ▼
+WorkflowEngine ──→ find_by_voice() ──→ run workflow steps
+    │                                       │
+    │ (no match)                           ├─ ollama action  → Ollama :11434 (local, free)
+    ▼                                      ├─ claude action  → claude CLI subprocess
+Claude daemon ──→ claude_suggest()         ├─ http action   → any REST API
+    │                                      ├─ shell action  → ~/.mjai/actions/* scripts
+    ▼                                      ├─ notify action → macOS notification
+Mode switch                                ├─ set_mode      → pending mode file
+    │                                      ├─ open_app      → open -a
+    ▼                                      └─ set_volume    → osascript
+FastAPI server :7700 (dashboard + webhooks)
+    │
+MongoDB :27017 (run history, future: memory store)
 ```
 
-AppKit (NSPanel overlay) ONLY called from main thread. No exceptions.
+## Local Infrastructure (already on this machine)
 
-## Claude integration
+| Service | Port | Role |
+|---------|------|------|
+| Ollama | :11434 | Local LLM — dolphin3:8b (131k ctx), kimi-k2.5 (262k, vision), mistral:7b |
+| MongoDB | :27017 | Workflow run history, persistent state |
+| UnamOS Engine | :7700 | Dashboard + webhook trigger API |
+| OpenClaw | :18789 | Optional: multi-agent gateway to Ollama |
 
-```python
-prompt = f"""
-{system_prompt}
-
---- USER CONTEXT ---
-Current time: Saturday June 28, 2026  5:20 PM
-Active mode: DEEP
-Active app: Visual Studio Code
-Open apps: Code, iTerm2, Arc, Slack, Spotify
-Recent git commits:
-  abc1234 fix overlay positioning
-  def5678 add FLOW and ADMIN modes
-
-Available modes: DEEP | COMMS | FLOW | ADMIN | REST
-
-User said: let me grind on this pr
-"""
-
-# Claude returns:
-# {"mode": "DEEP", "rationale": "already in it — stay locked"}
-```
-
-Claude runs via `claude -p "<prompt>"` subprocess with cwd=/tmp to avoid triggering Downloads folder TCC prompts.
-
-## PyInstaller bundle
+## Threading Model
 
 ```
-MJAI.app/
-  Contents/
-    Info.plist          ← CFBundleIdentifier: com.mjai.app, LSUIElement: true
-    MacOS/MJAI          ← PyInstaller bootloader
-    Frameworks/         ← Python runtime + all deps
-    Resources/          ← whisper model weights, pynput resources
+Main thread (AppKit/rumps)
+  └─ rumps.Timer @ 100ms  ←── reads trigger_queue, result_queue, .pending_mode file
+pynput thread              ──→ trigger_queue (start/stop)
+Audio/Whisper thread       ──→ result_queue (transcript)
+Claude thread              ──→ result_queue (mode, rationale)
+Engine thread (asyncio)
+  ├─ uvicorn FastAPI server :7700
+  ├─ workflow step execution (async)
+  └─ MongoDB writes (motor async)
 ```
 
-Key build flags:
-- `--collect-all whisper` — includes model weights
-- `--collect-all rumps` — includes ObjC resources
-- `--collect-all AVFoundation` — for mic TCC permission dialog
-- `--windowed` — no terminal window
+## Workflow System
 
-## macOS 26.2 compatibility
+Workflows live in `~/.mjai/workflows/*.yaml`. Hot-reloaded on change.
 
-macOS Tahoe enforces `CS_KILL` — kills any process that writes to unsigned executable memory pages. `openai-whisper` uses `numba` JIT compilation which hits this.
+### Trigger types
 
-**Fix:** `NUMBA_DISABLE_JIT=1` in LaunchAgent `EnvironmentVariables`. This makes numba a Python no-op with no JIT, letting Whisper run in pure Python mode.
+| Trigger | Example |
+|---------|---------|
+| `voice` | Say phrase → engine catches it before mode matching |
+| `cron` | `schedule: "0 8 * * 1-5"` → fires at 8am weekdays |
+| `webhook` | POST `/webhook/my-path` from any app/script |
+| `api` | POST `/api/run/<workflow-name>` |
 
-**Entitlements required:**
-```xml
-<key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
-<key>com.apple.security.cs.disable-library-validation</key><true/>
-<key>com.apple.security.device.audio-input</key><true/>
+### Action types
+
+| Action | What it does |
+|--------|-------------|
+| `ollama` | Local LLM inference (dolphin3, kimi-k2.5, mistral) |
+| `claude` | Claude CLI — complex reasoning, code generation |
+| `shell` | Run any script in `~/.mjai/actions/` |
+| `http` | Call any REST API |
+| `notify` | macOS notification |
+| `set_mode` | Switch MJAI mode from within a workflow |
+| `open_app` | Launch any Mac app |
+| `set_volume` | Set output volume |
+| `wait` | Pause N seconds |
+
+### Workflow YAML schema
+
+```yaml
+name: my_workflow
+description: "What it does"
+triggers:
+  - type: voice
+    phrase: "trigger phrase"
+  - type: cron
+    schedule: "0 9 * * 1-5"
+  - type: webhook
+    path: /my-hook
+steps:
+  - id: step1
+    action: ollama
+    model: dolphin3:8b
+    prompt: "Do something with {{voice_input}}"
+    output_key: result
+
+  - id: step2
+    action: notify
+    message: "{{result}}"
+
+  # Conditional step
+  - condition: "{{some_value}} == 'yes'"
+    then:
+      - action: set_mode
+        mode: DEEP
+    else:
+      - action: notify
+        message: "Not today"
+
+  # Parallel steps
+  - parallel:
+      - action: open_app
+        app: "Visual Studio Code"
+      - action: set_volume
+        level: 40
 ```
 
-## Config hot-reload
+### Template variables
 
-`watchdog.observers.Observer` watches `~/.mjai/` for file changes. When `config.yaml` changes, `daemon.reload_config()` runs without restarting the app. New modes and prompts take effect immediately.
+All string fields support `{{variable}}` substitution. Built-in variables:
+- `{{date}}` — "Saturday June 28 2026"
+- `{{time}}` — "5:30 PM"
+- `{{timestamp}}` — ISO8601
+- `{{workflow_name}}`, `{{run_id}}`, `{{trigger}}`
+- `{{voice_input}}` — the raw voice transcript (voice triggers)
+- Any output from a previous step by its `output_key`
 
-## TCC permissions
+## Modes (config-driven)
 
-| Service | Bundle ID | Status |
-|---------|-----------|--------|
-| Microphone | com.mjai.app | Granted once per build (resets on code signature change) |
-| Accessibility | com.mjai.app | Granted once, persists (pynput global hotkey) |
+Modes live in `~/.mjai/config.yaml`. Workflows can switch modes via `set_mode` action.
+Claude AI picks the best mode when voice doesn't match a workflow.
 
-**Mic resets:** Each rebuild changes the code signature hash. TCC associates permissions with (bundle_id, code_signature). Different signature = new app = new permission request.
+| Mode | Purpose |
+|------|---------|
+| DEEP | Focus work — DND on, VS Code + iTerm2, volume 30 |
+| COMMS | Communication — DND off, Slack + Discord + WhatsApp |
+| FLOW | Creative — DND on, Spotify, volume 50 |
+| ADMIN | Admin work — DND off, Arc browser |
+| REST | Break — DND on, volume 0 |
 
-**Permanent fix (future):** Sign with Apple Developer ID certificate. The same certificate across builds means TCC won't reset.
+## Windows Companion
 
-## Windows companion (planned)
+`windows/mjai_windows.py` — WebSocket service on port 56789.
+Mac sends mode changes; Windows side applies equivalent automations.
+Configure `windows_host` in `~/.mjai/config.yaml`.
 
-A lightweight Windows service (`mjai-windows/`) will:
-1. Expose a local WebSocket on port 56789
-2. Receive mode commands from MJAI macOS
-3. Execute Windows automations (PowerShell, COM, Win32 API)
-4. Allow unified voice → intent → cross-platform execution
+## macOS Specifics
+
+- `NUMBA_DISABLE_JIT=1` — prevents JIT hitting macOS 26.2 CS_KILL enforcement
+- `CLAUDE_DISABLE_DESKTOP=1` + `cwd=/tmp` — stops Downloads TCC prompts from claude CLI
+- `LSUIElement=true` — no Dock icon, menubar only
+- Bundle ID `com.mjai.app` — stable identity for TCC permissions
+- `entitlements.plist` — audio input entitlement for mic access
+- `codesign --deep --sign -` — single sign during build (second sign on deploy resets TCC)
+
+## Dashboard
+
+Open `http://127.0.0.1:7700` in any browser while MJAI.app is running.
+Shows: service status (Ollama, MongoDB), workflow list with run buttons, recent run history.
+
+## File Layout
 
 ```
-macOS MJAI     →  "DEEP mode"  →  Windows MJAI service
-                                  → close Teams notifications
-                                  → set Windows Focus Assist ON
-                                  → open VSCode on Windows
+~/.mjai/
+  config.yaml          — modes + hotkey + system prompt
+  workflows/           — your workflow YAML files (hot-reloaded)
+  actions/             — executable shell scripts
+  .state.json          — current mode + start time
+  mjai.log             — all logs
+  .pending_mode        — set_mode action writes here; poll loop reads it
+
+/Applications/MJAI.app — the bundle (LaunchAgent auto-starts it)
+
+~/Library/LaunchAgents/com.mjai.startup.plist — KeepAlive LaunchAgent
 ```

@@ -1,111 +1,78 @@
-# MJAI — Personal Automation OS
+# UnamOS
 
-A macOS menubar app that listens to your voice, understands your intent via Claude AI, and executes automations (mode switches, app launchers, DND, notifications).
+> Your personal automation OS. n8n + AI agent power, zero cloud cost, runs on your own Mac and Windows machines.
 
-## How it works
+## What it does
 
-```
-Hold cmd+shift+space  →  Whisper transcribes locally
-     ↓
-Claude AI reads your intent + current context (active app, time, git status)
-     ↓
-Picks a mode or answers conversationally
-     ↓
-Floating overlay bar shows result
-     ↓
-Mode scripts execute (open apps, set DND, send notifications)
-```
+- **Voice-first** — press hotkey, speak, let AI pick the right workflow or mode
+- **Workflow engine** — multi-step automation chains with local AI, HTTP calls, shell scripts, conditionals
+- **Local AI** — Ollama (dolphin3:8b, kimi-k2.5, mistral) for free inference in workflows  
+- **Claude integration** — uses your Claude subscription for mode selection and complex reasoning
+- **Web dashboard** — `http://localhost:7700` for workflow management and run history
+- **Mode switching** — DEEP/COMMS/FLOW/ADMIN/REST modes that configure your environment
+- **Windows companion** — WebSocket bridge for cross-machine automation
 
-## Architecture
-
-| File | Purpose |
-|------|---------|
-| `menubar.py` | Entry point — rumps app, hotkey bridge, poll timer |
-| `overlay.py` | Floating NSPanel pill bar (shows above all windows) |
-| `daemon.py` | Core logic — Claude integration, action runner, context gathering |
-| `voice.py` | Sounddevice recording + Whisper tiny (local, offline transcription) |
-| `hotkey.py` | pynput push-to-talk listener (holds key = recording) |
-| `config.py` | YAML config parser — modes, actions, Claude system prompt |
-| `build.sh` | PyInstaller build + deploy to /Applications/MJAI.app |
-| `entitlements.plist` | macOS entitlements (mic, unsigned memory for Whisper) |
-
-## Config
-
-Lives at `~/.mjai/config.yaml`. Hot-reloads on change (no restart needed).
-
-### Modes
-
-Each mode has a name, description, and list of actions. Actions are shell scripts in `~/.mjai/actions/`.
-
-```yaml
-modes:
-  DEEP:
-    description: "Deep focus — heads-down work"
-    actions:
-      - script: set_dnd
-        args: ["on"]
-      - script: open_app
-        args: ["Visual Studio Code"]
-```
-
-### Claude system prompt
-
-The system prompt in `config.yaml` instructs Claude how to respond. It receives:
-- User's spoken intent
-- Current time and day
-- Active frontmost app
-- List of open apps
-- Recent git commits
-
-Claude returns JSON: `{"mode": "DEEP", "rationale": "locking in"}` or `{"mode": null, "rationale": "It's 2pm on a Tuesday, great time to focus!"}` for conversational replies.
-
-## Action scripts
-
-All scripts live in `~/.mjai/actions/` and are called with `args` from the config.
-
-| Script | What it does |
-|--------|-------------|
-| `open_app` | `open -a <AppName>` |
-| `set_dnd` | `shortcuts run "DND On/Off"` |
-| `notify` | `osascript` notification |
-| `close_app` | `osascript` to quit an app |
-| `set_volume` | `osascript` to set system volume |
-
-## Dependencies
-
-- Python 3.12+ with `.venv`
-- `rumps` — macOS menubar framework
-- `pynput` — global hotkey listener (needs Accessibility permission)
-- `sounddevice` — mic recording
-- `openai-whisper` — local transcription (tiny model, offline)
-- `pyobjc` — NSPanel, NSColor, NSScreen etc
-- `watchdog` — hot-reload config.yaml
-- `pyinstaller` — bundle to .app
-
-## Build
+## Quick start
 
 ```bash
-bash build.sh
+# Press your hotkey (default: cmd+shift+space)
+# Speak any of these:
+"good morning"         → morning workflow: AI brief + DEEP mode
+"what should I work on" → checks git log + asks Claude for focus suggestion
+"research [topic]"     → asks local AI, sends notification
+"deep work"            → switches to DEEP mode (VS Code + iTerm2, DND on)
+"let's communicate"    → switches to COMMS mode (Slack, DND off)
 ```
 
-Bundles to `/Applications/MJAI.app`, re-signs for macOS 26.2, and restarts via LaunchAgent.
+## Dashboard
 
-## LaunchAgent
+Open http://localhost:7700 while MJAI.app is running.
 
-Auto-starts on login via `~/Library/LaunchAgents/com.mjai.startup.plist`.
+## Adding workflows
 
-Key env vars set in the plist:
-- `NUMBA_DISABLE_JIT=1` — prevents Whisper's numba JIT from writing unsigned executable memory (macOS 26.2 CS_KILL enforcement)
+Drop a YAML file in `~/.mjai/workflows/` — no restart needed, hot-reloaded:
 
-## Permissions required
+```yaml
+name: my_workflow
+description: "Do something useful"
+triggers:
+  - type: voice
+    phrase: "trigger phrase"
+  - type: cron
+    schedule: "0 9 * * 1-5"  # 9am weekdays
+steps:
+  - id: get_brief
+    action: ollama
+    model: dolphin3:8b
+    prompt: "Give me a quick brief about {{voice_input}}. 3 sentences max."
+    output_key: brief
+  
+  - id: notify
+    action: notify
+    message: "{{brief}}"
+```
 
-| Permission | Why |
-|-----------|-----|
-| Microphone | Recording voice via sounddevice |
-| Accessibility | pynput global hotkey detection |
+See [ARCHITECTURE.md](ARCHITECTURE.md) for full schema, action types, and template variables.
 
-Mic permission resets after each rebuild (code signature changes → TCC treats it as a new app). Click Allow once after each build session.
+## Project layout
 
-## Windows desktop integration (planned)
+```
+engine/          — workflow engine (actions.py, workflow.py, server.py)
+dashboard/       — web UI (static HTML, served at :7700)
+windows/         — Windows companion WebSocket service
+workflows/       — example workflow templates
+~/.mjai/
+  config.yaml    — modes + hotkey
+  workflows/     — your personal workflows (live here, hot-reloaded)
+  actions/       — shell scripts used by shell action
+```
 
-Future: a lightweight companion service on Windows that exposes the same mode API, allowing MJAI to control apps and automations across both machines from a single voice command.
+## Stack
+
+Python + rumps (Mac menubar) · PyObjC (overlay) · pynput (hotkey) · whisper (local STT) · Ollama (local LLM) · FastAPI + uvicorn (web server) · MongoDB (run history) · PyInstaller (bundle)
+
+## Docs
+
+- [SETUP.md](SETUP.md) — first-time setup
+- [MODES.md](MODES.md) — mode configuration 
+- [ARCHITECTURE.md](ARCHITECTURE.md) — full technical architecture

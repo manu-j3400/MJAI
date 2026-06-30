@@ -112,7 +112,7 @@ async def handle_client(websocket):
 
 
 async def main():
-    log.info("MJAI Windows service listening on ws://0.0.0.0:%d", PORT)
+    log.info("UnamOS Windows service listening on ws://0.0.0.0:%d", PORT)
     async with websockets.serve(handle_client, "0.0.0.0", PORT):
         await asyncio.Future()
 

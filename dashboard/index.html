@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UnamOS</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d0d12; color: #e2e2e8; font-family: -apple-system, BlinkMacSystemFont, "SF Pro", sans-serif; min-height: 100vh; }
+  header { padding: 20px 32px; border-bottom: 1px solid #1e1e2e; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; color: #fff; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: #3dd68c; box-shadow: 0 0 8px #3dd68c88; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 24px 32px; max-width: 1200px; }
+  .card { background: #13131f; border: 1px solid #1e1e2e; border-radius: 12px; padding: 20px; }
+  .card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-bottom: 16px; }
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .svc { background: #0d0d12; border-radius: 8px; padding: 12px 14px; display: flex; align-items: center; gap: 10px; }
+  .svc-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .svc-dot.ok { background: #3dd68c; }
+  .svc-dot.err { background: #f87171; }
+  .svc-dot.loading { background: #666; animation: pulse 1s infinite; }
+  .svc-name { font-size: 13px; color: #ccc; font-weight: 500; }
+  .svc-detail { font-size: 11px; color: #555; margin-top: 2px; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+  .wf-list { display: flex; flex-direction: column; gap: 8px; }
+  .wf { background: #0d0d12; border-radius: 8px; padding: 12px 14px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; transition: background .15s; }
+  .wf:hover { background: #18182a; }
+  .wf-name { font-size: 13px; font-weight: 600; color: #e2e2e8; }
+  .wf-desc { font-size: 11px; color: #555; margin-top: 2px; }
+  .wf-triggers { display: flex; gap: 4px; }
+  .tag { font-size: 10px; padding: 2px 7px; border-radius: 4px; background: #1e1e2e; color: #888; }
+  .run-btn { font-size: 11px; padding: 4px 12px; border-radius: 6px; background: #2563eb22; border: 1px solid #2563eb44; color: #60a5fa; cursor: pointer; transition: all .15s; }
+  .run-btn:hover { background: #2563eb44; }
+  .runs-table { width: 100%; border-collapse: collapse; }
+  .runs-table th { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #555; padding: 4px 8px; text-align: left; }
+  .runs-table td { font-size: 12px; color: #aaa; padding: 8px 8px; border-top: 1px solid #1e1e2e; }
+  .status-badge { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+  .status-badge.completed { background: #0d2d1a; color: #3dd68c; }
+  .status-badge.failed { background: #2d0d0d; color: #f87171; }
+  .status-badge.running { background: #0d1e2d; color: #60a5fa; }
+  .toast { position: fixed; bottom: 24px; right: 24px; background: #1e1e2e; border: 1px solid #2e2e3e; border-radius: 10px; padding: 12px 18px; font-size: 13px; color: #e2e2e8; transform: translateY(60px); opacity: 0; transition: all .3s; pointer-events: none; }
+  .toast.show { transform: translateY(0); opacity: 1; }
+  .reload-btn { margin-left: auto; font-size: 11px; padding: 4px 12px; border-radius: 6px; background: #1e1e2e; border: 1px solid #2e2e3e; color: #888; cursor: pointer; }
+  .reload-btn:hover { color: #ccc; }
+  .full-width { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="hdrDot"></div>
+  <h1>UnamOS</h1>
+  <button class="reload-btn" onclick="loadAll()">Refresh</button>
+</header>
+<div class="grid">
+  <div class="card">
+    <h2>Services</h2>
+    <div class="status-grid" id="services">
+      <div class="svc"><div class="svc-dot loading"></div><div><div class="svc-name">Loading…</div></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Workflows</h2>
+    <div class="wf-list" id="workflows">
+      <div style="color:#555;font-size:13px">Loading…</div>
+    </div>
+  </div>
+  <div class="card full-width">
+    <h2>Recent runs</h2>
+    <table class="runs-table">
+      <thead><tr><th>Workflow</th><th>Trigger</th><th>Status</th><th>Started</th><th>Steps</th></tr></thead>
+      <tbody id="runs"><tr><td colspan="5" style="color:#555;text-align:center;padding:20px">No runs yet</td></tr></tbody>
+    </table>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+function showToast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    const svcs = d.services;
+    const el = $('services');
+    el.innerHTML = Object.entries(svcs).map(([k, v]) => {
+      const ok = v.status === 'ok' || typeof v === 'number';
+      const dot = ok ? 'ok' : (v.status === 'offline' ? 'err' : 'err');
+      const detail = k === 'ollama' ? (v.models || []).slice(0,2).join(', ') :
+                     k === 'workflows' ? `${v} loaded` : (v.status || '');
+      return `<div class="svc"><div class="svc-dot ${dot}"></div><div><div class="svc-name">${k}</div><div class="svc-detail">${detail}</div></div></div>`;
+    }).join('');
+  } catch(e) {
+    $('services').innerHTML = '<div class="svc"><div class="svc-dot err"></div><div class="svc-name">Engine offline</div></div>';
+  }
+}
+
+async function loadWorkflows() {
+  try {
+    const r = await fetch('/api/workflows');
+    const d = await r.json();
+    $('workflows').innerHTML = d.workflows.map(w => `
+      <div class="wf">
+        <div>
+          <div class="wf-name">${w.name}</div>
+          <div class="wf-desc">${w.description || ''}</div>
+          <div class="wf-triggers" style="margin-top:6px">
+            ${(w.triggers||[]).map(t=>`<span class="tag">${t}</span>`).join('')}
+          </div>
+        </div>
+        <button class="run-btn" onclick="runWorkflow('${w.name}')">Run</button>
+      </div>
+    `).join('') || '<div style="color:#555;font-size:13px">No workflows found</div>';
+  } catch(e) {}
+}
+
+async function loadRuns() {
+  try {
+    const r = await fetch('/api/runs');
+    const d = await r.json();
+    if (!d.runs || !d.runs.length) return;
+    $('runs').innerHTML = d.runs.map(run => {
+      const dt = new Date(run.started_at).toLocaleTimeString();
+      return `<tr>
+        <td>${run.workflow}</td>
+        <td>${run.trigger}</td>
+        <td><span class="status-badge ${run.status}">${run.status}</span></td>
+        <td>${dt}</td>
+        <td>${(run.steps_run||[]).length}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) {}
+}
+
+async function runWorkflow(name) {
+  try {
+    await fetch(`/api/run/${name}`, {method:'POST', body:'{}'});
+    showToast(`Started: ${name}`);
+    setTimeout(loadRuns, 3000);
+  } catch(e) {
+    showToast('Failed to start workflow');
+  }
+}
+
+async function loadAll() {
+  await Promise.all([loadStatus(), loadWorkflows(), loadRuns()]);
+}
+
+loadAll();
+setInterval(loadAll, 10000);
+</script>
+</body>
+</html>
